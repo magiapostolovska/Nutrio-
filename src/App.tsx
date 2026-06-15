@@ -74,11 +74,16 @@ function AppContent() {
   }, [isAuthenticated, isAdmin]);
 
   useEffect(() => {
-    if (isAuthenticated && isAdmin) {
+  if (isAuthenticated) {
+    if (isAdmin) {
       setCurrentPage("admin");
       setNavigationParams(null);
+    } else {
+      setCurrentPage("profile");
+      setNavigationParams(null);
     }
-  }, [isAuthenticated, isAdmin]);
+  }
+}, [isAuthenticated, isAdmin]);
 
   const handleNavigate = (page: string, params?: any) => {
     window.history.pushState({ page, params }, "", `#${page}`);
@@ -235,18 +240,23 @@ function AppContent() {
           />
         )}
 
-        {currentPage === "payment" && (
-          <PaymentPage
-            onNavigate={handleNavigate}
-            returnTo={navigationParams?.returnTo || "profile"}
-            onPaid={async () => {
-              await refreshMembership();
-              const back = navigationParams?.returnTo || "profile";
-              setCurrentPage(back);
-              setNavigationParams(null);
-            }}
-          />
-        )}
+       {currentPage === "payment" && (
+  <PaymentPage
+    onNavigate={handleNavigate}
+    returnTo="myplan"
+    onPaid={async () => {
+      setMembershipActive(true);
+      setMembershipLoading(false);
+      setNavigationParams(null);
+      setCurrentPage("myplan");
+      window.history.pushState({ page: "myplan", params: null }, "", "#myplan");
+
+      try {
+        await refreshMembership();
+      } catch {}
+    }}
+  />
+)}
 
         {currentPage === "myplan" && (
           <MyPlanPage onNavigate={handleNavigate} onRecipeClick={handleRecipeClick} />

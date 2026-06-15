@@ -109,30 +109,51 @@ export function RecipesPage({
   const categories = ["All", "Breakfast", "Lunch", "Dinner", "Snack"];
   const diets = [
   "All",
+  "Omnivore",
   "Vegetarian",
   "Vegan",
   "Pescatarian",
 ];
 
   const filteredRecipes = recipes.filter((recipe: any) => {
-    const matchesSearch =
-      (recipe.title || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (recipe.description || "")
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase());
+  const title = recipe.title || recipe.Title || "";
+  const description = recipe.description || recipe.Description || "";
+  const category = recipe.category || recipe.Category || "";
+  const recipeId = recipe.id || recipe.RecipeId;
 
-    const matchesCategory =
-      selectedCategory === "All" || recipe.category === selectedCategory;
+  const matchesSearch =
+    title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    description.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const tags: string[] = Array.isArray(recipe.dietaryTags)
-      ? recipe.dietaryTags
-      : [];
-    const matchesDiet = selectedDiet === "All" || tags.includes(selectedDiet);
+  const matchesCategory =
+    selectedCategory === "All" || category === selectedCategory;
 
-    const matchesFavorites = !showFavorites || favorites.includes(recipe.id);
+  const rawTags =
+    recipe.Tags ||
+    recipe.tags ||
+    (Array.isArray(recipe.dietaryTags) ? recipe.dietaryTags.join(",") : "");
 
-    return matchesSearch && matchesCategory && matchesDiet && matchesFavorites;
-  });
+  const tags = String(rawTags)
+    .split(",")
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean);
+
+  const selectedDietLower = selectedDiet.toLowerCase();
+
+  const matchesDiet =
+    selectedDietLower === "all"
+      ? true
+      : selectedDietLower === "omnivore"
+      ? !tags.includes("vegan") &&
+        !tags.includes("vegetarian") &&
+        !tags.includes("pescatarian")
+      : tags.includes(selectedDietLower);
+
+  const matchesFavorites =
+    !showFavorites || favorites.includes(recipeId);
+
+  return matchesSearch && matchesCategory && matchesDiet && matchesFavorites;
+});
 
   return (
     <div className="min-h-screen bg-gray-50">

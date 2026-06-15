@@ -49,40 +49,38 @@ export function PaymentPage({ onNavigate, onPaid, returnTo }: PaymentPageProps) 
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  e.preventDefault();
 
-    if (!cardNumber || !expiryDate || !cvv || !cardName) {
-      toast.error('Please fill in all fields');
-      return;
-    }
+  if (!cardNumber || !expiryDate || !cvv || !cardName) {
+    toast.error('Please fill in all fields');
+    return;
+  }
 
-    if (cardNumber.replace(/\s/g, '').length !== 16) {
-      toast.error('Please enter a valid card number');
-      return;
-    }
+  if (cardNumber.replace(/\s/g, '').length !== 16) {
+    toast.error('Please enter a valid card number');
+    return;
+  }
 
-    if (cvv.length !== 3) {
-      toast.error('Please enter a valid CVV');
-      return;
-    }
+  if (cvv.length !== 3) {
+    toast.error('Please enter a valid CVV');
+    return;
+  }
 
-    setProcessing(true);
+  setProcessing(true);
 
-    try {
-      const providerPaymentId = 'demo_001';
-      await createMembership(providerPaymentId);
+  try {
+    const providerPaymentId = 'demo_001';
+    await createMembership(providerPaymentId);
 
-      await onPaid(); 
-      toast.success('Payment successful! Welcome to NutriLife Premium');
-
-      onNavigate(returnTo); 
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err.message || 'Payment failed');
-    } finally {
-      setProcessing(false);
-    }
-  };
+    await onPaid();
+    toast.success('Payment successful! Welcome to NutriLife Premium');
+  } catch (err: any) {
+    console.error(err);
+    toast.error(err.message || 'Payment failed');
+  } finally {
+    setProcessing(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-50 py-12 px-4">

@@ -329,9 +329,12 @@ export function ProfilePage({
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>No, Keep My Membership</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleCancelMembership} className="bg-red-600 hover:bg-red-700">
-                        Yes, Cancel Membership
-                      </AlertDialogAction>
+                      <AlertDialogAction
+  className="bg-green-600 hover:bg-green-700 text-white"
+  onClick={handleCancelMembership}
+>
+  Yes, Cancel Membership
+</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>

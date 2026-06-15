@@ -3,10 +3,50 @@ const db = require("../db/models");
 const recipeRepository = require("../repositories/recipesRepository");
 
 const mealTypes = ["breakfast", "lunch", "dinner", "snack"];
+function parseDateOnly(dateKey) {
+  const m = String(dateKey || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
 
-function toDateOnly(dateStr) {
-  const d = new Date(dateStr);
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+
+  return new Date(year, month - 1, day);
+}
+
+function formatDateOnlyLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function addDays(date, days) {
+  const copy = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function shuffle(arr) {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function toDateOnly(value) {
+  if (!value) return null;
+
+  if (typeof value === "string") {
+    const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  }
+
+  const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
+
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -285,46 +325,190 @@ async function generateWithMax(userId, payload, dailyMax) {
   const startDateKey = toDateOnly(payload.startDate);
   if (!startDateKey) throw new Error("Invalid startDate");
 
-  const days = payload.days || 30;
   if (!dailyMax || dailyMax <= 0) throw new Error("Invalid dailyMax");
 
-  const allRecipes = await db.Recipes.findAll({
-    attributes: ["RecipeId", "Calories"],
-    limit: 1000,
+  const start = parseDateOnly(startDateKey);
+  if (!start) throw new Error("Invalid startDate");
+
+  let days = Number(payload.days);
+
+  if (!Number.isInteger(days) || days <= 0) {
+    const endOfMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+    const startMidnight = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    const endMidnight = new Date(
+      endOfMonth.getFullYear(),
+      endOfMonth.getMonth(),
+      endOfMonth.getDate()
+    );
+
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    days =
+      Math.floor((endMidnight.getTime() - startMidnight.getTime()) / MS_PER_DAY) + 1;
+  }
+
+  console.log("Repo received startDateKey:", startDateKey, "days:", days);
+
+  const allRecipesRaw = await db.Recipes.findAll({
+    attributes: ["RecipeId", "Calories", "Category", "Title"],
+    limit: 5000,
+    raw: true,
   });
 
-  const recipes = allRecipes.map((r) => ({
-    RecipeId: r.RecipeId,
-    Calories: r.Calories ?? r.calories ?? 0,
-  }));
+  const allRecipes = allRecipesRaw
+    .map((r) => ({
+      RecipeId: r.RecipeId,
+      Calories: Number(r.Calories ?? 0),
+      Category: String(r.Category || "").toLowerCase(),
+      Title: r.Title,
+    }))
+    .filter((r) => r.RecipeId && r.Calories > 0 && mealTypes.includes(r.Category));
 
-  if (!recipes.length) return { createdDays: 0, createdItems: 0, message: "No recipes available" };
+  if (!allRecipes.length) {
+    return {
+      createdDays: 0,
+      createdItems: 0,
+      message: "No recipes available",
+    };
+  }
 
-  const pickThatFits = (remaining) => {
-    const fits = recipes.filter((r) => (r.Calories || 0) <= remaining);
-    if (!fits.length) return null;
-    return fits[Math.floor(Math.random() * fits.length)];
+  const MIN_DAILY_CALORIES = 1200;
+  const MAX_ATTEMPTS_PER_DAY = 200;
+
+  const targets = {
+    breakfast: Math.round(dailyMax * 0.25),
+    lunch: Math.round(dailyMax * 0.35),
+    dinner: Math.round(dailyMax * 0.30),
+    snack: Math.round(dailyMax * 0.10),
   };
 
-  const start = new Date(startDateKey);
-  let createdItems = 0;
+  function scoreRecipe(recipe, targetCalories, recentIds) {
+  const calorieDifference = Math.abs(recipe.Calories - targetCalories);
+  let usagePenalty = 0;
 
-  for (let i = 0; i < days; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const planDateKey = toDateOnly(d.toISOString());
+  const recentIndex = recentIds.lastIndexOf(recipe.RecipeId);
 
-    let remaining = dailyMax;
+  if (recentIndex !== -1) {
+    const howRecentlyUsed = recentIds.length - recentIndex;
+
+    if (howRecentlyUsed <= 4) {
+      usagePenalty = 1000;
+    } else if (howRecentlyUsed <= 8) {
+      usagePenalty = 500;
+    } else if (howRecentlyUsed <= 12) {
+      usagePenalty = 200;
+    }
+  }
+
+  return calorieDifference + usagePenalty;
+}
+
+  function pickBestRecipe(mealType, targetCalories, remainingCalories, recentIds, usedTodayIds) {
+    const candidates = allRecipes.filter((r) => {
+      if (r.Category !== mealType) return false;
+      if (usedTodayIds.includes(r.RecipeId)) return false;
+      if (r.Calories > remainingCalories) return false;
+      return true;
+    });
+
+    if (!candidates.length) return null;
+
+    const scored = candidates
+      .map((r) => ({
+        recipe: r,
+        score: scoreRecipe(r, targetCalories, recentIds),
+      }))
+      .sort((a, b) => a.score - b.score);
+
+    const topFew = scored.slice(0, Math.min(5, scored.length));
+    const randomized = shuffle(topFew);
+
+    return randomized[0]?.recipe || null;
+  }
+
+  function tryBuildSingleDay(recentRecipeIds) {
+    const usedTodayIds = [];
+    const selectedMeals = {};
+    let dayTotalCalories = 0;
 
     for (const mt of mealTypes) {
-      const chosen = pickThatFits(remaining);
+      const remainingCalories = dailyMax - dayTotalCalories;
 
-      const recipeId = chosen ? chosen.RecipeId : null;
-      const calories = chosen ? (chosen.Calories || 0) : 0;
-
-      if (calories > remaining) {
-        continue;
+      if (remainingCalories <= 0) {
+        return null;
       }
+
+      const targetForThisMeal = Math.min(targets[mt], remainingCalories);
+
+      const chosen = pickBestRecipe(
+        mt,
+        targetForThisMeal,
+        remainingCalories,
+        recentRecipeIds,
+        usedTodayIds
+      );
+
+      if (!chosen) {
+        return null;
+      }
+
+      selectedMeals[mt] = {
+        recipeId: chosen.RecipeId,
+        calories: chosen.Calories,
+      };
+
+      usedTodayIds.push(chosen.RecipeId);
+      dayTotalCalories += chosen.Calories;
+    }
+
+    if (dayTotalCalories < MIN_DAILY_CALORIES) {
+      return null;
+    }
+
+    if (dayTotalCalories > dailyMax) {
+      return null;
+    }
+
+    return {
+      selectedMeals,
+      usedTodayIds,
+      dayTotalCalories,
+    };
+  }
+
+  let createdItems = 0;
+  const recentRecipeIds = [];
+
+  for (let i = 0; i < days; i++) {
+    const currentDate = addDays(start, i);
+    const planDateKey = formatDateOnlyLocal(currentDate);
+    console.log("Generating:", planDateKey, "day", i + 1, "of", days);
+
+    let builtDay = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_DAY; attempt++) {
+      builtDay = tryBuildSingleDay(recentRecipeIds);
+
+      if (builtDay) {
+        console.log(
+          "Generated valid day:",
+          planDateKey,
+          "attempt:",
+          attempt,
+          "calories:",
+          builtDay.dayTotalCalories
+        );
+        break;
+      }
+    }
+
+    if (!builtDay) {
+      throw new Error(
+        `Could not generate a valid meal plan for ${planDateKey} within ${MAX_ATTEMPTS_PER_DAY} attempts. Check recipe calorie ranges.`
+      );
+    }
+
+    for (const mt of mealTypes) {
+      const meal = builtDay.selectedMeals[mt];
 
       const [row, created] = await db.MealPlanItems.findOrCreate({
         where: { UserId: userId, PlanDate: planDateKey, MealType: mt },
@@ -332,27 +516,37 @@ async function generateWithMax(userId, payload, dailyMax) {
           UserId: userId,
           PlanDate: planDateKey,
           MealType: mt,
-          RecipeId: recipeId,
-          Calories: calories,
+          RecipeId: meal.recipeId,
+          Calories: meal.calories,
           IsEaten: false,
           EatenAt: null,
         },
       });
 
       if (!created) {
-        row.RecipeId = recipeId;
-        row.Calories = calories;
+        row.RecipeId = meal.recipeId;
+        row.Calories = meal.calories;
         row.IsEaten = false;
         row.EatenAt = null;
         await row.save();
       }
 
-      remaining -= calories;
       createdItems += 1;
+    }
+
+    recentRecipeIds.push(...builtDay.usedTodayIds);
+
+    while (recentRecipeIds.length > 12) {
+      recentRecipeIds.shift();
     }
   }
 
-  return { createdDays: days, createdItems, startDate: startDateKey, dailyMax };
+  return {
+    createdDays: days,
+    createdItems,
+    startDate: startDateKey,
+    dailyMax,
+  };
 }
 
 module.exports = {

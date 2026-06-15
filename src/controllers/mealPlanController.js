@@ -243,11 +243,15 @@ async function createMealPlanManually(req, res) {
 async function createMealPlanGenerate(req, res) {
   try {
     const userId = getAuthUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     const { startDate } = req.body;
     if (!startDate) {
-      return res.status(400).json({ message: "startDate is required (YYYY-MM-DD)" });
+      return res.status(400).json({
+        message: "startDate is required (YYYY-MM-DD)",
+      });
     }
 
     const user = await getUserOrFail(userId);
@@ -281,7 +285,6 @@ async function createMealPlanGenerate(req, res) {
     }
 
     const ensured = await ensureUserProfile(user, req.body);
-
     if (!ensured || ensured.ok !== true) {
       return res.status(ensured?.status || 500).json(
         ensured?.response || { message: "Profile ensure failed (no response)" }
@@ -316,27 +319,39 @@ async function createMealPlanGenerate(req, res) {
       return res.status(400).json({ message: "Invalid startDate (YYYY-MM-DD)" });
     }
 
-    const [y, mo, da] = startKey.split("-").map(Number);
-    const start = new Date(y, (mo || 1) - 1, da || 1);
-    const endOfMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+    const [year, month, day] = startKey.split("-").map(Number);
 
-    const MS_PER_DAY = 86400000;
-    const diffDays =
-      Math.floor((endOfMonth.setHours(0, 0, 0, 0) - start.setHours(0, 0, 0, 0)) / MS_PER_DAY) + 1;
+const endDayOfMonth = new Date(year, month, 0).getDate();
 
-    const daysToGenerate = Math.max(1, diffDays); 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const startUtc = Date.UTC(year, month - 1, day);
+const endUtc = Date.UTC(year, month - 1, endDayOfMonth);
+
+const daysToGenerate = Math.floor((endUtc - startUtc) / MS_PER_DAY) + 1;
+
+const endDateKey = `${year}-${String(month).padStart(2, "0")}-${String(endDayOfMonth).padStart(2, "0")}`;
+
     const patch = {};
-    if (user.DailyTargetCal !== nutrition.maxCalories) patch.DailyTargetCal = nutrition.maxCalories;
 
-    if (!user.PlanStartDate && startKey) patch.PlanStartDate = startKey;
+    if (user.DailyTargetCal !== nutrition.maxCalories) {
+      patch.DailyTargetCal = nutrition.maxCalories;
+    }
 
-    if (Object.keys(patch).length) await user.update(patch);
+    if (!user.PlanStartDate && startKey) {
+      patch.PlanStartDate = startKey;
+    }
 
+    if (Object.keys(patch).length) {
+      await user.update(patch);
+    }
+console.log("Controller sending startKey:", startKey, "daysToGenerate:", daysToGenerate);
     const result = await mealPlanRepo.generateWithMax(
       userId,
       {
         ...req.body,
-        days: daysToGenerate, 
+        startDate: startKey,
+        days: daysToGenerate,
       },
       nutrition.maxCalories
     );
@@ -346,15 +361,16 @@ async function createMealPlanGenerate(req, res) {
       nutrition,
       meta: {
         startDate: startKey,
-        endDate: `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, "0")}-${String(
-          endOfMonth.getDate()
-        ).padStart(2, "0")}`,
+        endDate: endDateKey,
         daysGenerated: daysToGenerate,
       },
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ message: "Failed to generate meal plan", error: err.message });
+    return res.status(500).json({
+      message: "Failed to generate meal plan",
+      error: err.message,
+    });
   }
 }
 

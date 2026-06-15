@@ -76,7 +76,7 @@ export function HomePage({
               <div className="bg-green-100 border-2 border-green-600 rounded-lg p-4 inline-block">
                 <p className="text-lg text-gray-900">
                   <span className="font-semibold text-green-700">
-                    $5 one-time payment
+                    $5 payment
                   </span>{" "}
                   unlocks full meal planning access
                 </p>

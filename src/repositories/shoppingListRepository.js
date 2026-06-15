@@ -1,69 +1,177 @@
 const { Op } = require("sequelize");
 const db = require("../db/models");
 
+function parseQty(qtyText) {
+  const text = String(qtyText || "").trim();
+  if (!text) return null;
+
+  let match = text.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+  if (match) {
+    const whole = Number(match[1]);
+    const num = Number(match[2]);
+    const den = Number(match[3]);
+    if (den !== 0) return whole + num / den;
+  }
+
+  match = text.match(/^(\d+)\/(\d+)$/);
+  if (match) {
+    const num = Number(match[1]);
+    const den = Number(match[2]);
+    if (den !== 0) return num / den;
+  }
+
+  const n = Number(text);
+  return Number.isNaN(n) ? null : n;
+}
+
+function formatQty(num) {
+  if (!Number.isFinite(num)) return "";
+
+  if (Number.isInteger(num)) return String(num);
+
+  const whole = Math.floor(num);
+  const fraction = num - whole;
+
+  if (Math.abs(fraction - 0.25) < 0.01) {
+    return whole > 0 ? `${whole} 1/4` : "1/4";
+  }
+
+  if (Math.abs(fraction - 1 / 3) < 0.02) {
+    return whole > 0 ? `${whole} 1/3` : "1/3";
+  }
+
+  if (Math.abs(fraction - 0.5) < 0.01) {
+    return whole > 0 ? `${whole} 1/2` : "1/2";
+  }
+
+  if (Math.abs(fraction - 2 / 3) < 0.02) {
+    return whole > 0 ? `${whole} 2/3` : "2/3";
+  }
+
+  if (Math.abs(fraction - 0.75) < 0.01) {
+    return whole > 0 ? `${whole} 3/4` : "3/4";
+  }
+
+  return Number(num.toFixed(2)).toString();
+}
+
+function normalizeUnit(unit) {
+  const u = String(unit || "").trim().toLowerCase();
+
+  const map = {
+    g: "g",
+    gram: "g",
+    grams: "g",
+
+    kg: "kg",
+    kilogram: "kg",
+    kilograms: "kg",
+
+    ml: "ml",
+    milliliter: "ml",
+    milliliters: "ml",
+
+    l: "l",
+    liter: "l",
+    liters: "l",
+
+    cup: "cup",
+    cups: "cup",
+
+    tbsp: "tablespoon",
+    tablespoon: "tablespoon",
+    tablespoons: "tablespoon",
+
+    tsp: "teaspoon",
+    teaspoon: "teaspoon",
+    teaspoons: "teaspoon",
+
+    piece: "piece",
+    pieces: "piece",
+
+    clove: "clove",
+    cloves: "clove",
+
+    slice: "slice",
+    slices: "slice",
+  };
+
+  return map[u] || u;
+}
+
 function mergeIngredients(items) {
   const map = new Map();
 
-  items.forEach((item) => {
-    const text = item.itemText.trim();
+  for (const item of items) {
+    const text = String(item.itemText || "").trim();
+    if (!text) continue;
 
-    const match = text.match(/^(\d+)(g|ml|kg)?\s+(.*)$/i);
+    const match = text.match(
+      /^((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d+(?:\.\d+)?))(?:(?:\s+)(g|gram|grams|kg|kilogram|kilograms|ml|milliliter|milliliters|l|liter|liters|cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|piece|pieces|clove|cloves|slice|slices))?\s+(.*)$/i
+    );
 
     if (match) {
-      const qty = Number(match[1]);
-      const unit = match[2] || "";
-      const ingredient = match[3].toLowerCase();
-
-      const key = ingredient + unit;
+      const qty = parseQty(match[1]);
+      const unit = normalizeUnit(match[2] || "");
+      const ingredient = match[3].trim().toLowerCase();
+      const key = `${ingredient}||${unit}`;
 
       if (!map.has(key)) {
         map.set(key, {
-          itemText: `${qty}${unit} ${ingredient}`,
-          quantity: qty,
+          shoppingListItemIds: item.shoppingListItemId ? [item.shoppingListItemId] : [],
+          quantity: qty ?? 0,
           unit,
           ingredient,
-          checked: item.checked,
+          checked: !!item.checked,
         });
       } else {
         const existing = map.get(key);
-        existing.quantity += qty;
+        existing.quantity += qty ?? 0;
+
+        if (item.shoppingListItemId) {
+          existing.shoppingListItemIds.push(item.shoppingListItemId);
+        }
+
+        existing.checked = existing.checked && !!item.checked;
       }
     } else {
       const key = text.toLowerCase();
 
       if (!map.has(key)) {
         map.set(key, {
-          itemText: text,
-          quantity: 1,
+          shoppingListItemIds: item.shoppingListItemId ? [item.shoppingListItemId] : [],
+          quantity: null,
           ingredient: text,
           unit: "",
-          checked: item.checked,
+          checked: !!item.checked,
         });
       } else {
         const existing = map.get(key);
-        existing.quantity += 1;
+
+        if (item.shoppingListItemId) {
+          existing.shoppingListItemIds.push(item.shoppingListItemId);
+        }
+
+        existing.checked = existing.checked && !!item.checked;
       }
     }
-  });
+  }
 
   return Array.from(map.values()).map((item) => {
-    if (item.unit) {
-      return {
-        itemText: `${item.quantity}${item.unit} ${item.ingredient}`,
-        checked: false,
-      };
-    }
+    const firstId = item.shoppingListItemIds[0] || null;
 
-    if (item.quantity > 1) {
-      return {
-        itemText: `${item.quantity}x ${item.ingredient}`,
-        checked: false,
-      };
+    let itemText = item.ingredient;
+    if (item.quantity !== null) {
+      itemText = item.unit
+        ? `${formatQty(item.quantity)} ${item.unit} ${item.ingredient}`
+        : `${formatQty(item.quantity)} ${item.ingredient}`;
     }
 
     return {
-      itemText: item.ingredient,
-      checked: false,
+      shoppingListItemId: firstId,
+      shoppingListItemIds: item.shoppingListItemIds,
+      itemText,
+      checked: item.checked,
     };
   });
 }
@@ -71,6 +179,7 @@ function mergeIngredients(items) {
 function toDateOnly(dateStr) {
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return null;
+
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -143,14 +252,20 @@ async function ensureShoppingGeneratedForRange(userId, fromStr, toStr) {
   }
 
   const recipeIds = Array.from(
-    new Set(mealRows.map((r) => r.RecipeId).filter((x) => Number.isInteger(x) && x > 0))
+    new Set(
+      mealRows
+        .map((r) => r.RecipeId)
+        .filter((x) => Number.isInteger(x) && x > 0)
+    )
   );
 
   const ingredientsRows = await loadIngredientsForRecipeIds(recipeIds);
 
   const ingredientsByRecipeId = new Map();
   for (const ing of ingredientsRows) {
-    if (!ingredientsByRecipeId.has(ing.RecipeId)) ingredientsByRecipeId.set(ing.RecipeId, []);
+    if (!ingredientsByRecipeId.has(ing.RecipeId)) {
+      ingredientsByRecipeId.set(ing.RecipeId, []);
+    }
     ingredientsByRecipeId.get(ing.RecipeId).push(ing);
   }
 
@@ -201,14 +316,19 @@ async function ensureShoppingGeneratedForRange(userId, fromStr, toStr) {
     await db.ShoppingListItems.bulkCreate(bulk);
   }
 
-  await db.ShoppingListItems.destroy({
-    where: {
-      UserId: userId,
-      ForDate: { [Op.gte]: fromKey, [Op.lte]: toKey },
-      IsGenerated: true,
-      MealPlanItemId: { [Op.ne]: null, [Op.notIn]: Array.from(currentMealPlanItemIds) },
-    },
-  });
+  if (currentMealPlanItemIds.size > 0) {
+    await db.ShoppingListItems.destroy({
+      where: {
+        UserId: userId,
+        ForDate: { [Op.gte]: fromKey, [Op.lte]: toKey },
+        IsGenerated: true,
+        MealPlanItemId: {
+          [Op.ne]: null,
+          [Op.notIn]: Array.from(currentMealPlanItemIds),
+        },
+      },
+    });
+  }
 
   for (const [dateKey, rows] of mealsByDate.entries()) {
     const completed = isDayCompleted(rows);
@@ -226,6 +346,16 @@ async function ensureShoppingGeneratedForRange(userId, fromStr, toStr) {
   }
 
   return true;
+}
+
+function mergeShoppingRows(rows) {
+  return mergeIngredients(
+    rows.map((x) => ({
+      shoppingListItemId: x.ShoppingListItemId,
+      itemText: x.ItemText,
+      checked: !!x.IsChecked,
+    }))
+  );
 }
 
 async function buildDays(userId, fromKey, toKey) {
@@ -249,6 +379,7 @@ async function buildDays(userId, fromKey, toKey) {
   }
 
   const days = [];
+
   for (let i = 0; i < 7; i++) {
     const dateKey = addDays(fromKey, i);
     const dayMeals = mealsByDate.get(dateKey) || [];
@@ -257,27 +388,18 @@ async function buildDays(userId, fromKey, toKey) {
     const allItems = itemsByDate.get(dateKey) || [];
     const visibleItems = completed ? [] : allItems.filter((x) => !x.IsHidden);
 
-    const checkedCount = visibleItems.filter((x) => !!x.IsChecked).length;
+    const mergedItems = mergeShoppingRows(visibleItems);
 
-    
-
-const mergedItems = mergeIngredients(
-  visibleItems.map((x) => ({
-    itemText: x.ItemText,
-    checked: !!x.IsChecked,
-  }))
-);
-
-days.push({
-  date: dateKey,
-  completed,
-  hasMeals: dayMeals.length > 0,
-  items: mergedItems,
-  counts: {
-    total: mergedItems.length,
-    checked: mergedItems.filter((i) => i.checked).length,
-  },
-});
+    days.push({
+      date: dateKey,
+      completed,
+      hasMeals: dayMeals.length > 0,
+      items: mergedItems,
+      counts: {
+        total: mergedItems.length,
+        checked: mergedItems.filter((i) => i.checked).length,
+      },
+    });
   }
 
   return days;
@@ -309,18 +431,17 @@ async function getShoppingListRolling(userId) {
 
       const shoppingRows = await loadShoppingRows(userId, newKey, newKey);
       const visibleItems = completed ? [] : shoppingRows.filter((x) => !x.IsHidden);
-      const checkedCount = visibleItems.filter((x) => !!x.IsChecked).length;
+      const mergedItems = mergeShoppingRows(visibleItems);
 
       days.push({
         date: newKey,
         completed,
         hasMeals: mealRows.length > 0,
-        items: visibleItems.map((x) => ({
-          shoppingListItemId: x.ShoppingListItemId,
-          itemText: x.ItemText,
-          checked: !!x.IsChecked,
-        })),
-        counts: { total: visibleItems.length, checked: checkedCount },
+        items: mergedItems,
+        counts: {
+          total: mergedItems.length,
+          checked: mergedItems.filter((i) => i.checked).length,
+        },
       });
     }
 
@@ -341,11 +462,11 @@ async function getShoppingListRolling(userId) {
   };
 }
 
-
 async function setItemChecked(userId, shoppingListItemId, checked) {
   const row = await db.ShoppingListItems.findOne({
     where: { ShoppingListItemId: shoppingListItemId, UserId: userId },
   });
+
   if (!row) return null;
 
   row.IsChecked = !!checked;
@@ -376,6 +497,6 @@ module.exports = {
   getShoppingListRolling,
   setItemChecked,
   setDayAllChecked,
-  ensureShoppingGeneratedForRange, 
-  toDateOnly, 
+  ensureShoppingGeneratedForRange,
+  toDateOnly,
 };
